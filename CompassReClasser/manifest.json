@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Compass ReClasser",
+  "version": "1.0",
+  "default_locale": "en",
+  "description": "A simple colour editor for Compass classes.",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.compass.education/*"],
+      "js": ["content.js" ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
