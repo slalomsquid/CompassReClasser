@@ -1,104 +1,119 @@
+// Helper: Converts RGB strings to Hex for consistency
+function rgbToHex(rgb) {
+    const result = rgb.match(/\d+/g);
+    if (!result || result.length < 3) return rgb;
+    const r = parseInt(result[0]);
+    const g = parseInt(result[1]);
+    const b = parseInt(result[2]);
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+}
+
+
+// Helper: Extracts class name from parentheses, e.g., "Math (MAT101)" -> "MAT101"
 function extractClassName(text) {
     const match = text.match(/\((.*?)\)/);
-
-    if (match && match[1]) {
-        return match[1];
-    }
-
-    return text;
+    return (match && match[1]) ? match[1] : text;
 }
 
-function getClasses() {
-    const events = document.querySelectorAll(".ext-cal-evt");
-    
-    if (events.length === 0) {
-        // If we find nothing, let the popup know we are still searching
-        return ["Loading classes..."]; 
-    }
 
-    const classes = new Set();
-    events.forEach(event => {
-        const text = event.innerText || "";
-        const className = extractClassName(text);
-        if (className) classes.add(className);
-    });
-
-    return Array.from(classes);
-}
-
-function colorEvents(settings) {
-    const events = document.querySelectorAll(".ext-cal-evt");
-    
-    // Switch Check
-    if (settings.enabled === false) {
-        removeColors();
-        return;
-    }
-
-    events.forEach(event => {
-        const text = event.innerText || "";
-        const className = extractClassName(text);
-
-        if (settings[className]) {
-            // Save the default color if we haven't already
-            if (!event.dataset.originalBg) {
-                // getComputedStyle gets the color from the CSS file/class
-                event.dataset.originalBg = window.getComputedStyle(event).backgroundColor;
-                event.dataset.originalColor = window.getComputedStyle(event).color;
+// Helper: Captures the natural site colors before we modify them
+function captureOriginals(event) {
+    if (!event.dataset.originalBg) {
+        const style = window.getComputedStyle(event);
+        event.dataset.originalBg = style.backgroundColor;
+        event.dataset.originalColor = style.color;
+        
+        const children = event.querySelectorAll('*');
+        children.forEach((child, index) => {
+            if (!child.dataset.originalColor) {
+                child.dataset.originalColor = window.getComputedStyle(child).color;
             }
-
-            // Apply the custom color
-            event.style.backgroundColor = settings[className];
-            event.style.color = "#ffffff";
-        }
-    });
-}
-
-function removeColors() {
-    const events = document.querySelectorAll(".ext-cal-evt"); 
-    events.forEach(event => {
-        // Restore original colors if they exist
-        if (event.dataset.originalBg) {
-            event.style.backgroundColor = event.dataset.originalBg;
-            event.style.color = event.dataset.originalColor;
-            
-            // Clean up the data attributes
-            delete event.dataset.originalBg;
-            delete event.dataset.originalColor;
-        }
-    });
-    console.log("Original colors restored!");
-}
-
-// Update this to accept settings directly to avoid extra storage calls
-function applyColors(settings) {
-    if (settings) {
-        colorEvents(settings);
-    } else {
-        chrome.storage.sync.get(null, (result) => {
-            colorEvents(result);
         });
     }
 }
 
-applyColors();
+// Main Logic: Applies custom colors or reverts to originals
+function applyColors(settings) {
+    if (!settings) {
+        chrome.storage.sync.get(null, (res) => applyColors(res));
+        return;
+    }
 
+    const events = document.querySelectorAll(".ext-cal-evt");
+
+    events.forEach(event => {
+        captureOriginals(event);
+
+        if (settings.enabled === false) {
+            // REVERT to site originals
+            // event.style.backgroundImage = "url('https://picsum.photos/200/300')";
+            event.style.backgroundSize = "50px 50px";
+            event.style.backgroundColor = event.dataset.originalBg;
+            event.style.color = event.dataset.originalColor;
+            event.querySelectorAll('*').forEach(child => {
+                if (child.dataset.originalColor) {
+                    child.style.color = child.dataset.originalColor;
+                }
+            });
+            delete event.dataset.customized;
+        } else {
+            // APPLY custom colors
+            const text = event.innerText || "";
+            const className = extractClassName(text);
+
+            if (settings[className]) {
+                event.style.setProperty('background-color', settings[className].bg, 'important');
+                event.style.setProperty('color', settings[className].text, 'important');
+
+                event.querySelectorAll('*').forEach(child => {
+                    child.style.setProperty('color', settings[className].text, 'important');
+                });
+                event.dataset.customized = 'true';
+            }
+        }
+    });
+}
+
+// Scans for all unique class names for the popup list
+function getClasses() {
+    const events = document.querySelectorAll(".ext-cal-evt");
+    if (events.length === 0) return ["Try Reloading..."];
+
+    const classes = new Set();
+    events.forEach(event => {
+        const className = extractClassName(event.innerText || "");
+        if (className) classes.add(className);
+    });
+    return Array.from(classes);
+}
+
+// Observer: Watches for calendar changes (e.g., switching weeks)
 let updateTimer;
-const observer = new MutationObserver(() => {
-    clearTimeout(updateTimer);
-    updateTimer = setTimeout(() => applyColors(), 100);
+const observer = new MutationObserver((mutations) => {
+    const hasNewEvents = mutations.some(m => 
+        Array.from(m.addedNodes).some(node => 
+            node.nodeType === 1 && (node.classList.contains('ext-cal-evt') || node.querySelector('.ext-cal-evt'))
+        )
+    );
+
+    if (hasNewEvents) {
+        clearTimeout(updateTimer);
+        updateTimer = setTimeout(() => applyColors(), 150);
+    }
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
-// Message Listener for popup requests
+// Message Listener: Communication from popup.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "getClasses") {
         sendResponse(getClasses());
     } 
     else if (request.type === "updateColors") {
-        // Use the settings sent directly from the popup for instant feedback
         applyColors(request.settings);
         sendResponse(true);
     }
     return true;
 });
+
+// Initial Run
+applyColors()
